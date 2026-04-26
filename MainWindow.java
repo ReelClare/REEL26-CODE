@@ -859,8 +859,10 @@ public class MainWindow extends Application {
             Object algoResult = algoThread.result;
             this.setStatus("Algorithm finished");
 
-            //MAXFLOW
+            //MAXFLOW for next 3 lines
             MFLegendDock.close(); // hide legend for outside of algorithm
+            PluginControlPanel.clearCurrentAlgorithm(); // this line and below: clear control panel
+            PluginControlPanel.notifyPlannedPauseRequested(new ArrayList<>()); // when alg done
 
 
             // Show result if it is not null.

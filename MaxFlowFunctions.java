@@ -7,7 +7,6 @@ import java.util.*;
 import gralog.rendering.GralogGraphicsContext;
 import gralog.rendering.GralogColor;
 
-
 public class MaxFlowFunctions {
 
     // ensure source vertices fit criteria
@@ -17,7 +16,7 @@ public class MaxFlowFunctions {
 
         for (Object obj : c.getVertices()) {
             Vertex v = (Vertex) obj;
-            boolean hasS = (v.label.contains("S")|| v.label.contains("s"));
+            boolean hasS = (v.label.contains("S") || v.label.contains("s"));
             boolean hasNoIncoming = v.getIncomingNeighbours().isEmpty();
             boolean hasOutgoing = !v.getOutgoingNeighbours().isEmpty();
 
@@ -39,7 +38,7 @@ public class MaxFlowFunctions {
 
         for (Object obj : c.getVertices()) {
             Vertex v = (Vertex) obj;
-            boolean hasT = (v.label.contains("T")||v.label.contains("t"));
+            boolean hasT = (v.label.contains("T") || v.label.contains("t"));
             boolean hasNoOutgoing = v.getOutgoingNeighbours().isEmpty();
             boolean hasIncoming = !v.getIncomingNeighbours().isEmpty();
             if (hasT && hasNoOutgoing && hasIncoming) {
@@ -53,7 +52,7 @@ public class MaxFlowFunctions {
             return null;
     }
 
-    //residual graph built by adding reversed edges
+    // residual graph built by adding reversed edges
     public static Map<Edge, Edge> residualGraph(Structure c) {
         Map<Edge, Edge> reverse = new HashMap<>();
         List<Edge> original = new ArrayList<>(c.getEdges());
@@ -63,7 +62,7 @@ public class MaxFlowFunctions {
             e.weight = capacity;
             gralog.structure.Edge rev = c.addEdge(e.getTarget(), e.getSource());
             rev.weight = 0.0;
-            rev.type = GralogGraphicsContext.LineType.DASHED;   //dashed for visual distinction
+            rev.type = GralogGraphicsContext.LineType.DASHED; // dashed for visual distinction
 
             reverse.put(e, rev);
             reverse.put(rev, e);
@@ -72,10 +71,46 @@ public class MaxFlowFunctions {
         return reverse;
     }
 
+// labelling vertices in an intuitive way that allows for the user to understand which vertices are
+// incolved in each path
+    public static void giveVertexLabels(Structure c) {
+        List<Vertex> vertices = new ArrayList<>(c.getVertices());
+        List<Vertex> sList = new ArrayList<>();
+        List<Vertex> tList = new ArrayList<>();
+        List<Vertex> blankList = new ArrayList<>();
+
+        for (Vertex v : vertices) {
+            if (v.label.equals(""))
+                blankList.add(v);
+            else if (v.label.contains("S") || v.label.contains("s"))
+                sList.add(v);
+            else if (v.label.contains("T") || v.label.contains("t"))
+                tList.add(v);
+        }
+
+        int i = 0;
+        for (Vertex s : sList) {
+            s.label = ("S" + i);
+            i++;
+        }
+        i = 0;
+        for (Vertex t : tList) {
+            t.label = ("T" + i);
+            i++;
+        }
+        i = 0;
+        for (Vertex b : blankList) {
+            b.label = ("V" + i);
+            i++;
+        }
+    }
+
+
+
     // breadth first search, find sinks reachable from sources
     public static Vertex bfs(Structure c, ArrayList<Vertex> S,
-                            ArrayList<Vertex> T, Map<Edge, Edge> reverse,
-                            HashMap<Vertex, Edge> parentEdge, HashMap<Vertex, Vertex> parentVertex) {
+            ArrayList<Vertex> T, Map<Edge, Edge> reverse,
+            HashMap<Vertex, Edge> parentEdge, HashMap<Vertex, Vertex> parentVertex) {
 
         LinkedList<Vertex> queue = new LinkedList<>();
         HashSet<Vertex> visited = new HashSet<>();
@@ -106,27 +141,37 @@ public class MaxFlowFunctions {
         return null; // no paths left o7
     }
 
-    //recolour structure edges and vertices to default, prevent confusion
-    public static void recolour(Structure c) {
-        List<Vertex> vertices = new ArrayList<>(c.getVertices());
-        for (Vertex v : vertices)
-            v.fillColor = GralogColor.WHITE;
-
-        List<Edge> edges = new ArrayList<>(c.getEdges());
-        for (Edge e : edges)
-            if ((e.color != GralogColor.BLACK) && (e.type != GralogGraphicsContext.LineType.DASHED)) 
-                e.color = GralogColor.BLACK;
-    }
-
-    // build path from sink back to source, colour vertices to highlight path for user
-    public static ArrayList<Vertex> buildPath(Vertex sink, HashMap<Vertex, Vertex> parentVertex) {
+    // build path from sink back to source, colour vertices to highlight path for
+    // user
+    public static ArrayList<Vertex> buildPath(Structure c, Vertex sink, HashMap<Vertex, Vertex> parentVertex) {
         ArrayList<Vertex> path = new ArrayList<Vertex>();
         for (Vertex v = sink; v != null; v = parentVertex.get(v)) {
             path.add(0, v);
-            v.fillColor = GralogColor.GREEN;
         }
+        hilightPath(path, c);
         return path;
     }
+
+    public static void hilightPath(ArrayList<Vertex> path, Structure c) {
+        for (gralog.structure.Vertex v : path) {
+            v.fillColor = GralogColor.SEAFOAM; // Green highlighting
+                        }
+        for (int i = 0; i < path.size() - 1; i++) {
+            Vertex from = path.get(i);
+            Vertex to = path.get(i + 1);
+
+            // find edge from "from" to "to"
+            for (Edge e : (Set<Edge>) c.getEdges()) {
+                if (e.getSource() == from && e.getTarget() == to
+                        && e.type != GralogGraphicsContext.LineType.DASHED) {
+                    e.color = GralogColor.TANGERINE;
+                    e.thickness = 0.03; //slightly thicker line, as this increases font size,
+                    break;              // making the path in question more prominent
+                }
+            }
+        }
+    }
+
 
     // calculaste bottleneck
     public static double calculatePathFlow(ArrayList<Vertex> path, HashMap<Vertex, Edge> parentEdge) {
@@ -141,28 +186,44 @@ public class MaxFlowFunctions {
 
     // does what it says on the tin
     public static void updateFlowAlongPath(ArrayList<Vertex> path, double pathFlow,
-                                          HashMap<Vertex, Edge> parentEdge, Map<Edge, Edge> reverse) {
+            HashMap<Vertex, Edge> parentEdge, Map<Edge, Edge> reverse) {
         for (int i = 1; i < path.size(); i++) {
             Edge e = parentEdge.get(path.get(i));
             if (e != null && reverse.containsKey(e)) {
                 Edge rev = reverse.get(e);
                 e.weight -= pathFlow;
                 rev.weight += pathFlow;
+                e.label = String.format("%.1f", e.weight);
+                rev.label = String.format("%.1f", rev.weight);
             }
         }
     }
 
+    // string representation of path for control panel
+    public static String buildPathString(ArrayList<Vertex> path) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < path.size(); i++) {
+            if (i > 0)
+                sb.append(" -> ");
+            sb.append(path.get(i).label);
+        }
+        return sb.toString();
+    }
 
-    // min cut partition, red and blue for least common colour blindness issues 
-public static void highlightMinCutPartition(Structure c, ArrayList<Vertex> sources) {
+    // min cut partition, red and blue for least common colour blindness issues
+    // min cut edges found and converted to string for control panel output
+    public static String minCut(Structure c, ArrayList<Vertex> sources) {
+        Set<Edge> minCut = new HashSet<Edge>();
+        StringBuilder cutEdgesString = new StringBuilder();
+
         Set<Vertex> reachable = new HashSet<Vertex>();
         Queue<Vertex> queue = new LinkedList<Vertex>();
-        
+
         for (Vertex source : sources) {
             reachable.add(source);
             queue.add(source);
         }
-        
+
         while (!queue.isEmpty()) {
             Vertex current = queue.poll();
             for (Edge e : (Set<Edge>) c.getEdges()) {
@@ -175,23 +236,89 @@ public static void highlightMinCutPartition(Structure c, ArrayList<Vertex> sourc
                 }
             }
         }
-        
+
         for (Vertex v : (Collection<Vertex>) c.getVertices()) {
             if (reachable.contains(v)) {
-                v.fillColor = GralogColor.RED;
+                v.fillColor = GralogColor.CORAL;
             } else {
-                v.fillColor = GralogColor.BLUE;
+                v.fillColor = GralogColor.DUSK;
             }
         }
-        
-        // min cut edges found and highlighted for visual indication
+
         for (Edge e : (Set<Edge>) c.getEdges()) {
             Vertex v = e.getSource();
             Vertex u = e.getTarget();
 
-            if (reachable.contains(v) && !reachable.contains(u) && e.weight == 0 && e.type != GralogGraphicsContext.LineType.DASHED)
+            if (reachable.contains(v) && !reachable.contains(u) && e.weight == 0
+                    && e.type != GralogGraphicsContext.LineType.DASHED) {
+                minCut.add(e);
                 e.color = GralogColor.RED;
+                e.type = GralogGraphicsContext.LineType.DOTTED;
+                e.thickness = 0.03; // CONCLUDED WITH THIS DESIGN
+                // List<ControlPoint> ctrl = e.controlPoints;
+                // Vector2D start = ctrl.get((ctrl.size()-1)/2).getPosition();
+                // GralogGraphicsContext.putText(start.plus(e.thickness*10,e.thickness*10),
+                // e.weight, 0.025, e.color);
+            }
+        }
+
+        for (Edge e : minCut)
+            cutEdgesString.append(e.getSource().label + " -> " + e.getTarget().label).append(", ");
+
+        if (cutEdgesString.length() > 0) {
+            cutEdgesString.setLength(cutEdgesString.length() - 2);
+        }
+
+        return cutEdgesString.toString();
+    }
+
+    // recolour structure edges and vertices to default, prevent confusion
+    public static void recolour(Structure c) {
+        List<Vertex> vertices = new ArrayList<>(c.getVertices());
+        for (Vertex v : vertices)
+            v.fillColor = GralogColor.WHITE;
+
+        List<Edge> edges = new ArrayList<>(c.getEdges());
+        for (Edge e : edges)
+            if ((e.color != GralogColor.BLACK) && (e.type != GralogGraphicsContext.LineType.DASHED)) {
+                e.color = GralogColor.BLACK;
+                e.type = GralogGraphicsContext.LineType.PLAIN;
+                e.thickness = 0.025;
+            }
+    }
+
+    public static void updateEdgeDisplay(Structure c, Map<Edge, Edge> reverseEdgeMap,
+            HashMap<Edge, Double> originalWeights, boolean isResidualView) {
+        if (isResidualView) {
+            // default residual graph view: show all edges with remaining capacity
+            for (Edge e : (Set<Edge>) c.getEdges()) {
+                e.label = String.format("%.1f", e.weight);
+                if (e.type == GralogGraphicsContext.LineType.DASHED) {
+                    e.color = GralogColor.MINT;
+                    e.thickness = 0.025;
+                }
+            }
+        } else {
+            // alternative net flow view: hide reverse edges, show flow/capacity
+            for (Edge forwardEdge : originalWeights.keySet()) {
+                if (reverseEdgeMap.containsKey(forwardEdge)) {
+                    Edge reverseEdge = reverseEdgeMap.get(forwardEdge);
+
+                    // calculate current flow: original capacity - remaining capacity
+                    double originalCapacity = originalWeights.get(forwardEdge);
+                    double remainingCapacity = forwardEdge.weight;
+                    double currentFlow = originalCapacity - remainingCapacity;
+
+                    // Set forward edge label to "flow/capacity"
+                    forwardEdge.label = String.format("%.1f/%.1f", currentFlow, originalCapacity);
+
+                    // hide reverse edge, making it practically invisible, and removing edge label
+                    // by setting thickness to 0
+                    reverseEdge.color = GralogColor.TRANSPARENT;
+                    reverseEdge.thickness = 0.0;
+                }
+            }
         }
     }
-    
+
 }

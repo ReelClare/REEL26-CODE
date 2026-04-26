@@ -5,6 +5,7 @@ import javafx.scene.canvas.*;
 import javafx.scene.control.*;
 import javafx.scene.layout.*;
 import javafx.scene.paint.Color;
+import javafx.scene.text.*;
 
 public class MaxFlowLegendPanel extends ScrollPane {
     
@@ -13,30 +14,89 @@ public class MaxFlowLegendPanel extends ScrollPane {
     private static final int CANVAS_WIDTH = 60;
     private static final int VERTEX_RADIUS = 10;
     
+    // true = residual graph view, false = net flow view
+    private static boolean showResidualGraph = true;
+    private static Runnable onViewChanged = null;
+
+    public static void setViewChangeCallback(Runnable callback) {
+        onViewChanged = callback;
+        }
+    
+    public static boolean isResidualGraphView() {
+        return showResidualGraph;
+    }
+    
     public MaxFlowLegendPanel() {
         scrollPane = new VBox(3); // 3 spacing
-        scrollPane.setStyle("-fx-padding: 10; -fx-background-color:transparent;");
+        scrollPane.setStyle("-fx-background-color:transparent;");
         
+        // Title
         Label title = new Label("Max Flow Algorithm Legend");
         title.setFont(Font.font("System", FontWeight.BOLD, 14));
         scrollPane.getChildren().add(title);
         
+        // view toggle button
+        Button toggleButton = new Button("Switch to Net Flow View");
+        toggleButton.setStyle("-fx-font-size: 11px; -fx-padding: 5;");
+        toggleButton.setPrefWidth(200);
+        toggleButton.setOnAction(event -> {
+            showResidualGraph = !showResidualGraph;
+            if (showResidualGraph) {
+                toggleButton.setText("Switch to Net Flow View");
+            } else {
+                toggleButton.setText("Switch to Residual Graph View");
+            }
+            updateLegendContent();
+            
+            if (onViewChanged != null) {
+            onViewChanged.run();
+        }
+        });
+        
+        HBox buttonBox = new HBox(toggleButton);
+        buttonBox.setStyle("-fx-padding: 5 0 5 0;");
+        scrollPane.getChildren().add(buttonBox);
+
         scrollPane.getChildren().add(new Label("")); //spacing
         
-        addVertex(GralogColor.GREEN, "Vertex in current augmenting path");
-        addVertex(GralogColor.RED, "Source side of min-cut (reachable)");
-        addVertex(GralogColor.BLUE, "Sink side of min-cut (unreachable)");
+        updateLegendContent();
+        
+        this.setContent(scrollPane);
+        this.setFitToWidth(true);
+        this.setStyle("-fx-background-color: white;");
+    }
+    
+
+    private void updateLegendContent() {
+        // remove all children except title, button, and spacing ( orrr keep first 3 items)
+        while (scrollPane.getChildren().size() > 3) {
+            scrollPane.getChildren().remove(3);
+        }
+        
+        // vertex legend items r the same for both views
+        addVertex(GralogColor.SEAFOAM, "Vertex in current augmenting path");
+        addVertex(GralogColor.CORAL, "Source side of min-cut");
+        addVertex(GralogColor.DUSK, "Sink side of min-cut");
         addVertex(GralogColor.WHITE, "Unvisited/neutral vertex");
         
         scrollPane.getChildren().add(new Label(""));
         
-        addEdge(GralogColor.BLACK, false, false, "Original edge (remaining capacity)");
-        addEdge(GralogColor.BLACK, true,true, "Reverse edge (current flow)");
-        addEdge(GralogColor.RED, false,false, "Min-cut edge (bottleneck)");
-
-        this.setContent(scrollPane);
-        this.setFitToWidth(true);
-        this.setStyle("-fx-background-color: white;");
+        if (showResidualGraph) {
+            addEdge(GralogColor.BLACK, false, false, false, "Forward edge (remaining capacity)");
+            addEdge(GralogColor.TANGERINE, false, false, false, "Edge in current augmenting path");
+            addEdge(GralogColor.MINT, true, false, true, "Reverse edge (flow sent back)");
+            addEdge(GralogColor.RED, false, true, false, "Min-cut edge (bottleneck)");
+        } else {
+            addEdge(GralogColor.BLACK, false, false, false, "Edge (showing flow/capacity)");
+            addEdge(GralogColor.TANGERINE, false, false, false, "Edge in current augmenting path");
+            addEdge(GralogColor.RED, false, true, false, "Min-cut edge (bottleneck)");
+            
+            scrollPane.getChildren().add(new Label(""));
+            Label formatLabel = new Label("Edge Label Format:");
+            formatLabel.setFont(Font.font("System", FontWeight.BOLD, 12));
+            scrollPane.getChildren().add(formatLabel);
+            addText("X/Y", "X = current flow, Y = capacity");
+        }
     }
     
     private void addVertex(GralogColor gralogColor, String description) {
@@ -67,7 +127,7 @@ public class MaxFlowLegendPanel extends ScrollPane {
     }
     
 
-    private void addEdge(GralogColor gralogColor, boolean dashed, boolean backwardsArrow, String description) {
+    private void addEdge(GralogColor gralogColor, boolean dashed, boolean dotted, boolean backwardsArrow, String description) {
         Canvas canvas = new Canvas(CANVAS_WIDTH, ITEM_HEIGHT);
         GraphicsContext gc = canvas.getGraphicsContext2D();
         
@@ -82,13 +142,14 @@ public class MaxFlowLegendPanel extends ScrollPane {
         
         if (dashed) {
             gc.setLineDashes(5, 5);
+        } else if (dotted){
+            gc.setLineDashes(3,3);
         } else {
             gc.setLineDashes(null);
         }
         
         gc.strokeLine(startX, y, endX, y);
         
-  
         double arrowSize = 6;
         gc.setLineDashes(null);  // solid for arrow
         
@@ -111,7 +172,23 @@ public class MaxFlowLegendPanel extends ScrollPane {
         
         scrollPane.getChildren().add(hbox);
     }
+    
 
+    private void addText(String symbol, String description) {
+        Label symbolLabel = new Label(symbol);
+        symbolLabel.setFont(Font.font("Monospaced", FontWeight.BOLD, 12));
+        symbolLabel.setMinWidth(CANVAS_WIDTH);
+        symbolLabel.setStyle("-fx-padding: 0 10 0 10;");
+        
+        Label descLabel = new Label(description);
+        descLabel.setFont(Font.font("System", 11));
+        
+        javafx.scene.layout.HBox hbox = new javafx.scene.layout.HBox(10);
+        hbox.getChildren().addAll(symbolLabel, descLabel);
+        hbox.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
+        
+        scrollPane.getChildren().add(hbox);
+    }
     
     // needed to convert GralogColor to JavaFX Color using r, g, b fields, ensure
     // that colours are consistent between graph and legend

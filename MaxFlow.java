@@ -1,5 +1,5 @@
-
 import gralog.maxflow.functions.MaxFlowFunctions;
+import gralog.gralogfx.panels.MaxFlowLegendPanel;
 
 import gralog.algorithm.*;
 import gralog.progresshandler.ProgressHandler; // Note: onProgress(c) required to redraw graph.
@@ -26,22 +26,30 @@ public class MaxFlow extends Algorithm {
     private volatile boolean skipToEnd = false;
     private volatile boolean frontStepped = false;
     private volatile boolean backStepped = false;
+    private volatile boolean isResidualView = true;
     private final Object pauseLock = new Object();
-
-    private HashMap<Edge, Double> originalWeights = null;
-    private Map<Edge, Edge> reverseEdgeMap = null;
     double maxFlow;
+    int iteration;
+    boolean completedNormally;
 
+    Map<Edge, Edge> reverse;
+    List<Vertex> unlabelled = new ArrayList<>();
+
+    // State history for back-stepping
     private static class AlgorithmState {
-        HashMap<Edge, Double> edgeWeights; // all edge weights at this point
+        HashMap<Edge, Double> edgeWeights;
         double maxFlow;
-        ArrayList<Vertex> lastPath; // path found in this iteration (for highlighting)
+        ArrayList<Vertex> lastPath;
+        int iteration;
+        String stepHistoryText;
 
-        AlgorithmState(Structure c, double maxFlow, ArrayList<Vertex> path) {
+        AlgorithmState(Structure c, double maxFlow, ArrayList<Vertex> path, int iteration, String historyText) {
             this.maxFlow = maxFlow;
+            this.iteration = iteration;
+            this.stepHistoryText = historyText;
             this.lastPath = path != null ? new ArrayList<>(path) : null;
 
-            // snapshot all edge weights
+            // Snapshot all edge weights
             this.edgeWeights = new HashMap<Edge, Double>();
             for (Edge e : (Set<Edge>) c.getEdges()) {
                 this.edgeWeights.put(e, e.weight);
@@ -52,14 +60,37 @@ public class MaxFlow extends Algorithm {
     private ArrayList<AlgorithmState> stateHistory = new ArrayList<>();
     private int currentStateIndex = -1; // Index in stateHistory we're currently at
 
-    // fulkersonMaxFlow function removed due to the algorithm behaving differently
-    // for each button
+    private HashMap<Edge, Double> originalWeights = null;
+    private Map<Edge, Edge> reverseEdgeMap = null;
+
+    private StringBuilder stepHistory = new StringBuilder();
 
     @SuppressWarnings("unchecked")
     public Object run(Structure c, AlgorithmParameters p, Set<Object> selection,
             ProgressHandler onprogress) throws Exception {
 
-        // lines till while (!stopped) ensuring algorithm can perform on generated graph
+        // ability for user to switch between views of the graph.
+        MaxFlowLegendPanel.setViewChangeCallback(() -> {
+            try {
+                Platform.runLater(() -> {
+                    try {
+                        boolean isResidualView = MaxFlowLegendPanel.isResidualGraphView();
+                        MaxFlowFunctions.updateEdgeDisplay(c, reverseEdgeMap, originalWeights, isResidualView);
+                        onprogress.onProgress(c);
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                });
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        });
+
+        MaxFlowFunctions.recolour(c);
+        // progress.setProgress(0); // clear progress bar, 1/3 filled bar [COME BACK
+        // HERE]
+
+        // ensuring algorithm can perform on generated graph
         // while giving clear instructions of how to rectify issues
         if (c.getVertices().size() == 0)
             return "The structure should not be empty.";
@@ -78,115 +109,265 @@ public class MaxFlow extends Algorithm {
         if (sinks == null)
             return ("Please, label all sinks with 'T'. Ensure you have no incoming edges to your sources, and no outgoing edges from your sinks.");
 
-        synchronized (pauseLock) {
-            playing = false;
-            stopped = false;
-            skipToEnd = false;
-            frontStepped = false;
-            backStepped = false;
-        }
+        // algorithm runs in an infinite while loop; necessary to allow multiple
+        // visualisations
+        // of the same graph without requiring the user to redraw/reselect algorithm,
+        // especially when using "skip" button.
+        while (true) {
 
-        // user's graph saved so as to allow it to be recovered when aborting algorithm
-        originalWeights = new HashMap<Edge, Double>();
-        for (Edge e : (Set<Edge>) c.getEdges()) {
-            originalWeights.put(e, e.weight);
-        }
+            List<Vertex> potUnlabelled = new ArrayList<>(c.getVertices());
+            for (Vertex v : potUnlabelled) {
+                if (v.label.equals(""))
+                    unlabelled.add(v);
+            } // keep unlabelled vertices in mind so new label can be erased when original
+              // graph recovered
 
-        // residual graph generated immediately after algorithm selected
-        Map<Edge, Edge> reverse = MaxFlowFunctions.residualGraph(c);
-        reverseEdgeMap = reverse;
+            if (!backStepped) { // if backstepped=true do NOT initialise graph
+                synchronized (pauseLock) {
+                    playing = false;
+                    stopped = false;
+                    skipToEnd = false;
+                    frontStepped = false;
+                }
 
-        double maxFlow = 0;
+                stepHistory = new StringBuilder(); // cleared history for beginning of each iteration
 
-        // show initial state of algorithm, and communicate with the user how to
-        // progress
+                // user's graph saved so as to allow it to be recovered when aborting algorithm
+                originalWeights = new HashMap<Edge, Double>();
+                for (Edge e : (Set<Edge>) c.getEdges()) {
+                    originalWeights.put(e, e.weight);
+                    e.label = String.format("%.1f", e.weight); // display labels on edges to aid in clarity of algorithm
+                }
 
-        onprogress.onProgress(c); // redraw graph to show updates
-        waitForStep(); // indefinite wait until user interacts with the algorithm
-        if (stopped) { // ISSUE stopping algorithm restores the original graph but only before
-                       // termination
-            restoreGraph(c, onprogress);
-            onprogress.onProgress(c); // restore original graph visually
-            return "Original graph restored, select desired algorithm from dropdown menu above.";
-        }
+                // residual graph generated immediately after algorithm selected
+                reverse = MaxFlowFunctions.residualGraph(c); // Assign to field, not local variable
+                reverseEdgeMap = reverse;
 
-        while (!stopped) {
+                for (Edge forwardEdge : originalWeights.keySet()) {
+                    if (reverse.containsKey(forwardEdge)) {
+                        Edge reverseEdge = reverse.get(forwardEdge);
+                        reverseEdge.label = String.format("%.1f", reverseEdge.weight);
+                        reverseEdge.color = GralogColor.MINT; //lighter lines for visual distinction
+                    // lighter colour for residual edges, visually distinct
+                    } // graph with backflow edges visible is the default
+                }
 
-            if (backStepped) {
+                MaxFlowFunctions.giveVertexLabels(c);
+                maxFlow = 0;
+                iteration = 0;
+                stateHistory = new ArrayList<>(); // Reset state history for this run
+                currentStateIndex = -1;
 
-                if (currentStateIndex <= 0) {
-                    // Can't go back further - already at initial state
+                // Save initial state (iteration 0)
+                AlgorithmState initialState = new AlgorithmState(c, maxFlow, null, iteration, stepHistory.toString());
+                stateHistory.add(initialState);
+                currentStateIndex = 0;
+
+                // show initial state of algorithm, and communicate with the user how to
+                // progress
+                updateControlPanel(iteration, 0, maxFlow, "Initial residual graph - press Play to begin", "");
+                onprogress.onProgress(c); // redraw graph to show updates
+                waitForStep(); // indefinite wait until user interacts with the algorithm
+            } // end of initialisation
+
+            if (stopped) { // stopping algorithm before it begins in earnest (or double clicking stop)
+                           // restores the original graph
+                List<Edge> edges = new ArrayList<>(c.getEdges());
+                for (Edge e : edges)
+                    e.label = ""; // get rid of added edge labels, as it was before
+                restoreGraph(c, onprogress, unlabelled);
+                onprogress.onProgress(c); // restore original graph visually
+                MaxFlowLegendPanel.setViewChangeCallback(null); // ensure null when algorithm ends
+                return "Original graph restored, select desired algorithm from dropdown menu above.";
+            }
+
+            completedNormally = false; // algorithm beginning in earnest, so not completed
+            while (!stopped) {
+
+                if (backStepped) {
+                    if (currentStateIndex <= 0) {
+                        // already at initial state
+                        updateControlPanel(iteration, 0, maxFlow, "Cannot step back - at initial state", "");
+                        backStepped = false;
+                        onprogress.onProgress(c);
+                        waitForStep();
+                        continue;
+                    }
+
                     backStepped = false;
+                    MaxFlowFunctions.recolour(c);
+                    currentStateIndex--;
+                    AlgorithmState prevState = stateHistory.get(currentStateIndex);
+
+                    // Restore graph state from snapshot
+                    for (Map.Entry<gralog.structure.Edge, Double> entry : prevState.edgeWeights.entrySet()) {
+                        entry.getKey().weight = entry.getValue();
+                        entry.getKey().label = String.valueOf(entry.getValue());
+                    }
+
+                    // restoring algorithm variables
+                    maxFlow = prevState.maxFlow;
+                    ArrayList<Vertex> path = prevState.lastPath;
+                    iteration = prevState.iteration;
+
+                    // back in step history, truncated to this point
+                    stepHistory = new StringBuilder(prevState.stepHistoryText);
+
+                    // highlight the path from this iteration
+                    if (prevState.lastPath != null)
+                        MaxFlowFunctions.hilightPath(prevState.lastPath, c);
+
+                    // Update display
+                    if (currentStateIndex == 0) {
+                        updateControlPanel(iteration, 0, maxFlow,
+                                "BackStep: Showing pass " + iteration + " - No path to display", "");
+                    } else {
+                        updateControlPanel(iteration, 0, maxFlow,
+                                "BackStep: Showing pass " + iteration + " - Path highlighted", "");
+                    }
                     onprogress.onProgress(c);
+
+                    playing = false; // Pause with path visible
                     waitForStep();
+
+                    if (stopped) {
+                        updateControlPanel(0, 0, 0, "Graph restored - press Play to restart algorithm", "");
+                        restoreGraph(c, onprogress, unlabelled);
+                        MaxFlowFunctions.giveVertexLabels(c); // labels given after new iteration
+                        onprogress.onProgress(c);
+                        break;
+                    }
+
+                    MaxFlowFunctions.recolour(c); // clear highlighting after user continues
+                    onprogress.onProgress(c);
                     continue;
                 }
 
-                backStepped = false;
-                MaxFlowFunctions.recolour(c);
-                currentStateIndex--;
-                AlgorithmState prevState = stateHistory.get(currentStateIndex);
+                if (frontStepped) {
+                    HashMap<Vertex, Vertex> parentVertex = new HashMap<Vertex, Vertex>();
+                    HashMap<Vertex, Edge> parentEdge = new HashMap<Vertex, Edge>();
+                    Vertex sink = MaxFlowFunctions.bfs(c, sources, sinks, reverse, parentEdge, parentVertex);
 
-                // restoring graph state from snapshot
-                for (Map.Entry<gralog.structure.Edge, Double> entry : prevState.edgeWeights.entrySet()) {
-                    entry.getKey().weight = entry.getValue();
-                }
-
-                // restoring algorithm variables
-                maxFlow = prevState.maxFlow;
-                ArrayList<Vertex> path = prevState.lastPath;
-
-                // MaxFlowFunctions.updateFlowAlongPath(path, pathFlow, parentEdge, reverse);
-                // highlight the path from this iteration
-                if (prevState.lastPath != null) {
-                    for (gralog.structure.Vertex v : prevState.lastPath) {
-                        v.fillColor = GralogColor.GREEN; // Green highlighting
+                    if (sink == null) {
+                        completedNormally = true;
+                        frontStepped = false;
+                        break;
                     }
-                    for (int i = 0; i < prevState.lastPath.size() - 1; i++) {
-                        Vertex from = prevState.lastPath.get(i);
-                        Vertex to = prevState.lastPath.get(i + 1);
+
+                    ArrayList<Vertex> path = MaxFlowFunctions.buildPath(c, sink, parentVertex);
+                    if (path == null || path.isEmpty()) {
+                        completedNormally = true;
+                        frontStepped = false;
+                        break;
                     }
-                }
-                
-                playing = false;
-                onprogress.onProgress(c);
-                waitForStep();
+                    double pathFlow = MaxFlowFunctions.calculatePathFlow(path, parentEdge);
+                    if (pathFlow <= 0) {
+                        completedNormally = true;
+                        frontStepped = false;
+                        break;
+                    }
 
-                MaxFlowFunctions.recolour(c);
-                onprogress.onProgress(c);
+                    iteration++;
+                    maxFlow += pathFlow;
+                    updateControlPanel(iteration, pathFlow, maxFlow,
+                            "Found path " + MaxFlowFunctions.buildPathString(path), "");
+                    MaxFlowFunctions.updateFlowAlongPath(path, pathFlow, parentEdge, reverse);
+                    onprogress.onProgress(c); // redraw with highlighted path
 
-                if (stopped) {
-                    restoreGraph(c, onprogress);
+                    // Save state AFTER applying flow so it can restore to this point
+                    // and remove any future states (if user went back then forward)
+                    while (stateHistory.size() > currentStateIndex + 1) {
+                        stateHistory.remove(stateHistory.size() - 1);
+                    }
+                    // Aadding current state
+                    AlgorithmState newState = new AlgorithmState(c, maxFlow, path, iteration, stepHistory.toString());
+                    stateHistory.add(newState);
+                    currentStateIndex = stateHistory.size() - 1;
+
+                    frontStepped = false;
+                    playing = false;
+                    waitForStep(); // PAUSE HERE path stays green
+
+                    MaxFlowFunctions.recolour(c);
                     onprogress.onProgress(c);
-                    return "Original graph restored, select desired algorithm from dropdown menu above.";
-                }
-                continue;
-            }
 
-            if (frontStepped) {
+                    if (stopped) {
+                        updateControlPanel(0, 0, 0, "Graph restored - press Play to restart algorithm", "");
+                        restoreGraph(c, onprogress, unlabelled);
+                        MaxFlowFunctions.giveVertexLabels(c); // labels given after new iteration
+                        onprogress.onProgress(c);
+                        break;
+                    }
+                    continue; // wait for next button press
+                }
+
+                if (skipToEnd) {
+                    while (true) { // instantaneous algorithm completion
+                        HashMap<Vertex, Vertex> pv = new HashMap<Vertex, Vertex>();
+                        HashMap<Vertex, Edge> pe = new HashMap<Vertex, Edge>();
+                        Vertex sink = MaxFlowFunctions.bfs(c, sources, sinks, reverse, pe, pv);
+                        if (sink == null) {
+                            break;
+                        }
+                        ArrayList<Vertex> path = MaxFlowFunctions.buildPath(c, sink, pv);
+                        if (path == null || path.isEmpty())
+                            break;
+                        double pathFlow = MaxFlowFunctions.calculatePathFlow(path, pe);
+                        if (pathFlow <= 0)
+                            break;
+
+                        iteration++;
+
+                        // logging steps to history v quick so the user can still read the steps taken
+                        // to reach conclusion
+                        stepHistory.append(String.format("Step %d: Found path: %s (Path flow: %.2f)\n", iteration,
+                                MaxFlowFunctions.buildPathString(path), pathFlow));
+                        MaxFlowFunctions.updateFlowAlongPath(path, pathFlow, pe, reverse);
+                        maxFlow += pathFlow;
+
+                        while (stateHistory.size() > currentStateIndex + 1) {
+                            stateHistory.remove(stateHistory.size() - 1);
+                        }
+                        AlgorithmState newState = new AlgorithmState(c, maxFlow, path, iteration,
+                                stepHistory.toString());
+                        stateHistory.add(newState);
+                        currentStateIndex = stateHistory.size() - 1;
+                    }
+                    updateControlPanel(iteration, 0, maxFlow, "Skipped to completion", "");
+                    MaxFlowFunctions.recolour(c);
+                    onprogress.onProgress(c); // only redraw graph at the end, don't overwhelm user with all
+                                              // those flashing nodes
+                    completedNormally = true;
+                    break; // leave the main loop, algorithm done but still hanging in end-state limbo
+                }
+
+                // with no skip, algorithm takes its time for the user to understand the process
                 HashMap<Vertex, Vertex> parentVertex = new HashMap<Vertex, Vertex>();
                 HashMap<Vertex, Edge> parentEdge = new HashMap<Vertex, Edge>();
                 Vertex sink = MaxFlowFunctions.bfs(c, sources, sinks, reverse, parentEdge, parentVertex);
 
-                if (sink == null) {
-                    frontStepped = false;
+                if (sink == null) {// no path left? done
+                    completedNormally = true;
                     break;
                 }
 
-                ArrayList<Vertex> path = MaxFlowFunctions.buildPath(sink, parentVertex);
+                ArrayList<Vertex> path = MaxFlowFunctions.buildPath(c, sink, parentVertex);
                 if (path == null || path.isEmpty()) {
-                    frontStepped = false;
+                    completedNormally = true;
                     break;
                 }
                 double pathFlow = MaxFlowFunctions.calculatePathFlow(path, parentEdge);
                 if (pathFlow <= 0) {
-                    frontStepped = false;
+                    completedNormally = true;
                     break;
                 }
 
-                MaxFlowFunctions.updateFlowAlongPath(path, pathFlow, parentEdge, reverse);
+                iteration++;
                 maxFlow += pathFlow;
-                
+                updateControlPanel(iteration, pathFlow, maxFlow,
+                        "Found path " + MaxFlowFunctions.buildPathString(path), "");
+                MaxFlowFunctions.updateFlowAlongPath(path, pathFlow, parentEdge, reverse);
+                onprogress.onProgress(c); // redraw with highlighted path
 
                 // Save state AFTER applying flow so it can restore to this point
                 // and remove any future states (if user went back then forward)
@@ -194,91 +375,61 @@ public class MaxFlow extends Algorithm {
                     stateHistory.remove(stateHistory.size() - 1);
                 }
                 // Aadding current state
-                AlgorithmState newState = new AlgorithmState(c, maxFlow, path);
+                AlgorithmState newState = new AlgorithmState(c, maxFlow, path, iteration, stepHistory.toString());
                 stateHistory.add(newState);
                 currentStateIndex = stateHistory.size() - 1;
 
-                frontStepped = false;
-                playing = false;
-                onprogress.onProgress(c); // redraw with highlighted path
                 waitForStep(); // PAUSE HERE path stays green
 
                 MaxFlowFunctions.recolour(c);
                 onprogress.onProgress(c);
 
                 if (stopped) {
-                    restoreGraph(c, onprogress);
+                    restoreGraph(c, onprogress, unlabelled);
+                    MaxFlowFunctions.giveVertexLabels(c);
+                    updateControlPanel(0, 0, 0, "Graph restored - press Play to restart algorithm", "");
                     onprogress.onProgress(c);
-                    return "Original graph restored, select desired algorithm from dropdown menu above.";
+                    break; // hang in beginning-state limbo
                 }
-                continue; //wait for next button press
             }
 
-            if (skipToEnd) {
-                while (true) { // instantaneous algorithm completion
-                    HashMap<Vertex, Vertex> pv = new HashMap<Vertex, Vertex>();
-                    HashMap<Vertex, Edge> pe = new HashMap<Vertex, Edge>();
-                    Vertex sink = MaxFlowFunctions.bfs(c, sources, sinks, reverse, pe, pv);
-                    if (sink == null)
-                        break;
-                    ArrayList<Vertex> path = MaxFlowFunctions.buildPath(sink, pv);
-                    if (path == null || path.isEmpty())
-                        break;
-                    double pathFlow = MaxFlowFunctions.calculatePathFlow(path, pe);
-                    if (pathFlow <= 0)
-                        break;
-                    MaxFlowFunctions.updateFlowAlongPath(path, pathFlow, pe, reverse);
-                    maxFlow += pathFlow;
-
-                }
-                break;
-            }
-
-            HashMap<Vertex, Vertex> parentVertex = new HashMap<Vertex, Vertex>();
-            HashMap<Vertex, Edge> parentEdge = new HashMap<Vertex, Edge>();
-            Vertex sink = MaxFlowFunctions.bfs(c, sources, sinks, reverse, parentEdge, parentVertex);
-
-            if (sink == null)
-                break;
-            ArrayList<Vertex> path = MaxFlowFunctions.buildPath(sink, parentVertex);
-            if (path == null || path.isEmpty())
-                break;
-            double pathFlow = MaxFlowFunctions.calculatePathFlow(path, parentEdge);
-            if (pathFlow <= 0)
-                break;
-
-            waitForStep(); // after each update, unless user has pressed pause, wait 3 seconds until
-                           // continuing
-
-            MaxFlowFunctions.updateFlowAlongPath(path, pathFlow, parentEdge, reverse);
-            maxFlow += pathFlow;
-
-
-
-            // Save state after flow update (for backStep)
-            while (stateHistory.size() > currentStateIndex + 1) {
-                stateHistory.remove(stateHistory.size() - 1);
-            }
-            AlgorithmState newState = new AlgorithmState(c, maxFlow, path);
-            stateHistory.add(newState);
-            currentStateIndex = stateHistory.size() - 1;
             
-            onprogress.onProgress(c);
-            waitForStep(); // 3 seconds
-            MaxFlowFunctions.recolour(c);
+            if (completedNormally) { // if completed normally, show the partition and wait indefinitely
+                String minCutEdges = MaxFlowFunctions.minCut(c, sources);
+                onprogress.onProgress(c);
 
-            if (stopped) { // ISSUE stopping algorithm restores the original graph but only before
-                // termination
-                restoreGraph(c, onprogress);
-                onprogress.onProgress(c); // restore original graph visually
-                return "Original graph restored, select desired algorithm from dropdown menu above.";
+                iteration++;
+
+                
+                
+                // log as new state so as to backstep accurately
+                while (stateHistory.size() > currentStateIndex + 1) {
+                    stateHistory.remove(stateHistory.size() - 1);
+                }
+                AlgorithmState newState = new AlgorithmState(c, maxFlow, null, iteration, stepHistory.toString());
+                stateHistory.add(newState);
+                currentStateIndex = stateHistory.size() - 1;
+
+                //updateControlPanel(iteration, 0, maxFlow, "No more augmenting paths - Complete! Max flow = " + String.format("%.2f", maxFlow)
+                //        + " - Min-cut shown (Red/Blue) - Press any button to restore & restart", minCutEdges);
+
+                synchronized (pauseLock) { // wait indefinitely for user to press any button
+                    pauseLock.wait();
+                }
+                if (backStepped) {
+                    completedNormally = false;
+                    continue;
+                }
+
+                // any button press leads to restoring graph and restarting
+                restoreGraph(c, onprogress, unlabelled);
+                MaxFlowFunctions.giveVertexLabels(c);
+                updateControlPanel(0, 0, 0, "Graph restored - press Play to restart algorithm", "");
+                onprogress.onProgress(c);
+                continue; // beginning loop again :D
             }
-
         }
 
-        MaxFlowFunctions.highlightMinCutPartition(c, sources);
-        onprogress.onProgress(c);
-        return "Maximum Flow = " + maxFlow;
     }
 
     // BUTTONS FOR INTERACTIVITY
@@ -352,30 +503,80 @@ public class MaxFlow extends Algorithm {
         }
     }
 
-    private void restoreGraph(Structure c, ProgressHandler onprogress) {
+    private void updateGraphDisplay(Structure c, ProgressHandler onprogress) {
+        try {
+            boolean isResidualView = MaxFlowLegendPanel.isResidualGraphView();
+            MaxFlowFunctions.updateEdgeDisplay(c, reverseEdgeMap, originalWeights, isResidualView);
+            onprogress.onProgress(c);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    // function must remain local so it can have access to status of play and update
+    // buttons
+    private void updateControlPanel(int iteration, double pathFlow, double totalFlow, String message, String minCut) {
+        // add each update and their corresponding passes to the history (accumulates
+        // across the run)
+
+        if (message.contains("Found"))
+            stepHistory.append(String.format("Pass %d: %s (Path flow: %.2f)\n", iteration, message, pathFlow));
+        if (message.contains("No more"))
+            stepHistory.append(String.format("Pass %d: %s\n", iteration, message));
+        if (message.contains("Min-cut"))
+            stepHistory
+                    .append(String.format("Pass %d: %s\n" + "Edges across partition: %s", iteration, message, minCut));
+
+        final boolean isPlaying = this.playing;
+        final String historySnapshot = stepHistory.toString();
+
+        Platform.runLater(() -> {
+            List<String[]> vars = new ArrayList<String[]>();
+            vars.add(new String[] { "Showing Pass", String.valueOf(iteration) });
+            vars.add(new String[] { "Total Flow", String.format("%.2f", totalFlow) });
+            vars.add(new String[] { "Status", message });
+            vars.add(new String[] { "Path Flow", String.format("%.2f", pathFlow) });
+            vars.add(new String[] { "Edges Across Partition", minCut });
+            vars.add(new String[] { "Step History", "\n" + historySnapshot });
+            PluginControlPanel.notifyPlannedPauseRequested(vars);
+
+            // show the correct button; || while auto-advancing, |> while paused
+            if (isPlaying)
+                PluginControlPanel.notifyPlayRequested();
+        });
+    }
+
+    private void restoreGraph(Structure c, ProgressHandler onprogress, List<Vertex> unlabelled) {
         if (originalWeights == null)
             return;
 
-        if (reverseEdgeMap != null) { // remove reverse edges
+        // remove reverse edges
+        if (reverseEdgeMap != null) {
             for (Map.Entry<Edge, Edge> entry : reverseEdgeMap.entrySet()) {
                 if (originalWeights.containsKey(entry.getKey())) {
                     c.removeEdge(entry.getValue());
                 }
             }
-
-            // restore original weights
-            for (Map.Entry<Edge, Double> entry : originalWeights.entrySet()) {
-                entry.getKey().weight = entry.getValue();
-            }
-
-            originalWeights = null;
-            reverseEdgeMap = null;
-            MaxFlowFunctions.recolour(c);
-
-            try {
-                onprogress.onProgress(c);
-            } catch (Exception ignored) {
-            } // redraw
         }
+
+        // restore original weights
+        for (Map.Entry<Edge, Double> entry : originalWeights.entrySet()) {
+            entry.getKey().weight = entry.getValue();
+        }
+
+        if (unlabelled.size() != 0) {
+            for (Vertex v : unlabelled) {
+                v.label = "";
+            }
+        }
+
+        originalWeights = null;
+        reverseEdgeMap = null;
+        MaxFlowFunctions.recolour(c);
+
+        try {
+            onprogress.onProgress(c);
+        } catch (Exception ignored) {
+        } // redraw
     }
 }
