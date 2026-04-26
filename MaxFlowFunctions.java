@@ -106,8 +106,55 @@ public class MaxFlowFunctions {
         return null; // no paths left o7
     }
 
+    //recolour structure edges and vertices to default, prevent confusion
+    public static void recolour(Structure c) {
+        List<Vertex> vertices = new ArrayList<>(c.getVertices());
+        for (Vertex v : vertices)
+            v.fillColor = GralogColor.WHITE;
+
+        List<Edge> edges = new ArrayList<>(c.getEdges());
+        for (Edge e : edges)
+            if ((e.color != GralogColor.BLACK) && (e.type != GralogGraphicsContext.LineType.DASHED)) 
+                e.color = GralogColor.BLACK;
+    }
+
+    // build path from sink back to source, colour vertices to highlight path for user
+    public static ArrayList<Vertex> buildPath(Vertex sink, HashMap<Vertex, Vertex> parentVertex) {
+        ArrayList<Vertex> path = new ArrayList<Vertex>();
+        for (Vertex v = sink; v != null; v = parentVertex.get(v)) {
+            path.add(0, v);
+            v.fillColor = GralogColor.GREEN;
+        }
+        return path;
+    }
+
+    // calculaste bottleneck
+    public static double calculatePathFlow(ArrayList<Vertex> path, HashMap<Vertex, Edge> parentEdge) {
+        double pathFlow = Double.MAX_VALUE;
+        for (int i = 1; i < path.size(); i++) {
+            Edge e = parentEdge.get(path.get(i));
+            if (e != null)
+                pathFlow = Math.min(pathFlow, e.weight);
+        }
+        return pathFlow;
+    }
+
+    // does what it says on the tin
+    public static void updateFlowAlongPath(ArrayList<Vertex> path, double pathFlow,
+                                          HashMap<Vertex, Edge> parentEdge, Map<Edge, Edge> reverse) {
+        for (int i = 1; i < path.size(); i++) {
+            Edge e = parentEdge.get(path.get(i));
+            if (e != null && reverse.containsKey(e)) {
+                Edge rev = reverse.get(e);
+                e.weight -= pathFlow;
+                rev.weight += pathFlow;
+            }
+        }
+    }
+
+
     // min cut partition, red and blue for least common colour blindness issues 
-    public static void highlightMinCutPartition(Structure c, ArrayList<Vertex> sources) {
+public static void highlightMinCutPartition(Structure c, ArrayList<Vertex> sources) {
         Set<Vertex> reachable = new HashSet<Vertex>();
         Queue<Vertex> queue = new LinkedList<Vertex>();
         
@@ -146,6 +193,5 @@ public class MaxFlowFunctions {
                 e.color = GralogColor.RED;
         }
     }
-
-
+    
 }
