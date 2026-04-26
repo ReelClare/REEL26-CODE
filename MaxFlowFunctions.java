@@ -1,7 +1,10 @@
+// This file is an extension of GrALoG, Copyright (c) 2016-2018 LaS group, TU Berlin.
+// This file was created by Clare Reel in 2026
+
 package gralog.maxflow.functions;
 
 import gralog.algorithm.*;
-import gralog.structure.*; 
+import gralog.structure.*;
 import java.util.*;
 
 import gralog.rendering.GralogGraphicsContext;
@@ -71,41 +74,40 @@ public class MaxFlowFunctions {
         return reverse;
     }
 
-// labelling vertices in an intuitive way that allows for the user to understand which vertices are
-// incolved in each path
-    public static void giveVertexLabels(Structure c) {
+    // labelling vertices in an intuitive way that allows for the user to understand
+    // which vertices are
+    // incolved in each path
+    public static void giveVertexLabels(Structure c, ArrayList<Vertex> sources, ArrayList<Vertex> sinks) {
         List<Vertex> vertices = new ArrayList<>(c.getVertices());
-        List<Vertex> sList = new ArrayList<>();
-        List<Vertex> tList = new ArrayList<>();
         List<Vertex> blankList = new ArrayList<>();
 
         for (Vertex v : vertices) {
             if (v.label.equals(""))
                 blankList.add(v);
-            else if (v.label.contains("S") || v.label.contains("s"))
-                sList.add(v);
-            else if (v.label.contains("T") || v.label.contains("t"))
-                tList.add(v);
         }
 
         int i = 0;
-        for (Vertex s : sList) {
+        for (Vertex s : sources) {
+            for (Vertex d : vertices)
+                while (d.label.equals("S" + i))
+                    i++;
             s.label = ("S" + i);
-            i++;
         }
         i = 0;
-        for (Vertex t : tList) {
+        for (Vertex t : sinks) {
+            for (Vertex d : vertices)
+                while (d.label.equals("T" + i))
+                    i++;
             t.label = ("T" + i);
-            i++;
         }
         i = 0;
         for (Vertex b : blankList) {
+            for (Vertex d : vertices)
+                while (d.label.equals("V" + i))
+                    i++;
             b.label = ("V" + i);
-            i++;
         }
     }
-
-
 
     // breadth first search, find sinks reachable from sources
     public static Vertex bfs(Structure c, ArrayList<Vertex> S,
@@ -143,19 +145,35 @@ public class MaxFlowFunctions {
 
     // build path from sink back to source, colour vertices to highlight path for
     // user
-    public static ArrayList<Vertex> buildPath(Structure c, Vertex sink, HashMap<Vertex, Vertex> parentVertex) {
+    public static ArrayList<Vertex> buildPath(Structure c, Vertex sink, HashMap<Vertex, Vertex> parentVertex, HashMap<Vertex, Edge> parentEdge) {
         ArrayList<Vertex> path = new ArrayList<Vertex>();
         for (Vertex v = sink; v != null; v = parentVertex.get(v)) {
             path.add(0, v);
         }
-        hilightPath(path, c);
+        hilightPath(path, parentEdge);
         return path;
     }
 
-    public static void hilightPath(ArrayList<Vertex> path, Structure c) {
+    public static void hilightPath(ArrayList<Vertex> path, HashMap<Vertex, Edge> parentEdge) { //DEBUGED: highlight the right edges
+ 
         for (gralog.structure.Vertex v : path) {
-            v.fillColor = GralogColor.SEAFOAM; // Green highlighting
-                        }
+            v.fillColor = new GralogColor(0xffb66e); // clementine
+            //v.fillColor = new GralogColor(0x5167a2); // blu
+            Edge e = parentEdge.get(v);
+            if (e != null){
+                e.color = new GralogColor(0xe16f00); // tangerine
+                e.thickness = 0.03; // slightly thicker line, as this increases font size,
+            }//break; // making the path in question more prominent
+        } 
+        /*
+        for (int i = 1; i < path.size(); i++) {
+            Edge e = parentEdge.get(path.get(i));
+            if (e != null){
+                e.color = new GralogColor(0xe16f00); // tangerine
+                e.thickness = 0.03; // slightly thicker line, as this increases font size,
+                break; // making the path in question more prominent
+            }
+        }
         for (int i = 0; i < path.size() - 1; i++) {
             Vertex from = path.get(i);
             Vertex to = path.get(i + 1);
@@ -164,14 +182,13 @@ public class MaxFlowFunctions {
             for (Edge e : (Set<Edge>) c.getEdges()) {
                 if (e.getSource() == from && e.getTarget() == to
                         && e.type != GralogGraphicsContext.LineType.DASHED) {
-                    e.color = GralogColor.TANGERINE;
-                    e.thickness = 0.03; //slightly thicker line, as this increases font size,
-                    break;              // making the path in question more prominent
+                    e.color = new GralogColor(0xe16f00); // tangerine
+                    e.thickness = 0.03; // slightly thicker line, as this increases font size,
+                    break; // making the path in question more prominent
                 }
             }
-        }
+        } */
     }
-
 
     // calculaste bottleneck
     public static double calculatePathFlow(ArrayList<Vertex> path, HashMap<Vertex, Edge> parentEdge) {
@@ -186,18 +203,18 @@ public class MaxFlowFunctions {
 
     // does what it says on the tin
     public static void updateFlowAlongPath(ArrayList<Vertex> path, double pathFlow,
-            HashMap<Vertex, Edge> parentEdge, Map<Edge, Edge> reverse) {
+            HashMap<Vertex, Edge> parentEdge, Map<Edge, Edge> reverse, boolean isResidualGraphView) {
         for (int i = 1; i < path.size(); i++) {
             Edge e = parentEdge.get(path.get(i));
-            if (e != null && reverse.containsKey(e)) {
-                Edge rev = reverse.get(e);
-                e.weight -= pathFlow;
-                rev.weight += pathFlow;
-                e.label = String.format("%.1f", e.weight);
-                rev.label = String.format("%.1f", rev.weight);
+                if (e != null && reverse.containsKey(e)) {
+                    Edge rev = reverse.get(e);
+                    e.weight -= pathFlow;
+                    rev.weight += pathFlow;
+                    e.label = String.format("%.2f", e.weight);
+                    rev.label = String.format("%.2f", rev.weight);
+                }
             }
         }
-    }
 
     // string representation of path for control panel
     public static String buildPathString(ArrayList<Vertex> path) {
@@ -239,9 +256,10 @@ public class MaxFlowFunctions {
 
         for (Vertex v : (Collection<Vertex>) c.getVertices()) {
             if (reachable.contains(v)) {
-                v.fillColor = GralogColor.CORAL;
+                //v.fillColor = new GralogColor(0xffd9d9); // coral 
+                v.fillColor = new GralogColor(0x5167a2); // blu
             } else {
-                v.fillColor = GralogColor.DUSK;
+                v.fillColor = new GralogColor(0x740000); // maroon
             }
         }
 
@@ -252,7 +270,7 @@ public class MaxFlowFunctions {
             if (reachable.contains(v) && !reachable.contains(u) && e.weight == 0
                     && e.type != GralogGraphicsContext.LineType.DASHED) {
                 minCut.add(e);
-                e.color = GralogColor.RED;
+                e.color = GralogColor.NAVY;
                 e.type = GralogGraphicsContext.LineType.DOTTED;
                 e.thickness = 0.03; // CONCLUDED WITH THIS DESIGN
                 // List<ControlPoint> ctrl = e.controlPoints;
@@ -292,9 +310,9 @@ public class MaxFlowFunctions {
         if (isResidualView) {
             // default residual graph view: show all edges with remaining capacity
             for (Edge e : (Set<Edge>) c.getEdges()) {
-                e.label = String.format("%.1f", e.weight);
+                e.label = String.format("%.2f", e.weight);
                 if (e.type == GralogGraphicsContext.LineType.DASHED) {
-                    e.color = GralogColor.MINT;
+                    e.color = new GralogColor(0x81b8c1); // minty blue
                     e.thickness = 0.025;
                 }
             }
@@ -310,15 +328,28 @@ public class MaxFlowFunctions {
                     double currentFlow = originalCapacity - remainingCapacity;
 
                     // Set forward edge label to "flow/capacity"
-                    forwardEdge.label = String.format("%.1f/%.1f", currentFlow, originalCapacity);
+                    forwardEdge.label = String.format("%.2f/%.2f", currentFlow, originalCapacity);
 
-                    // hide reverse edge, making it practically invisible, and removing edge label
+                    // hide reverse edge, making it practically invisible, and "removing" edge label
                     // by setting thickness to 0
-                    reverseEdge.color = GralogColor.TRANSPARENT;
+                    reverseEdge.color = new GralogColor(0xf2f2f2); // transparent
                     reverseEdge.thickness = 0.0;
                 }
             }
         }
     }
+
+    public static double roundToSignificantFigures(double num, int n) { //STACKOVERFLOW
+    if(num == 0) {
+        return 0;
+    }
+
+    final double d = Math.ceil(Math.log10(num < 0 ? -num: num));
+    final int power = n - (int) d;
+
+    final double magnitude = Math.pow(10, power);
+    final long shifted = Math.round(num*magnitude);
+    return shifted/magnitude;
+}
 
 }
